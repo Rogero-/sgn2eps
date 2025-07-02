@@ -2,18 +2,23 @@
 import sys
 import struct
 
-# SGN format constants (tweak if needed)
-HEADER_SIZE = 32
-OP_MOVE   = 0x01
-OP_LINE   = 0x02
-OP_CURVE  = 0x03
-OP_END    = 0xFF
+# Candidate opcodes
+OPCODES = {
+    0x01: "M",   # MoveTo
+    0x02: "L",   # LineTo
+    0x03: "C",   # CurveTo
+    0xFF: "END"  # End of data
+}
 
-def read_sgn(path):
-    data = open(path, "rb").read()
-    if len(data) <= HEADER_SIZE:
-        raise ValueError("File too small or wrong HEADER_SIZE")
-    return data[HEADER_SIZE:]
+def find_header_offset(data):
+    """
+    Scan data for the first byte matching any known opcode.
+    Returns the index of that byte.
+    """
+    for i, b in enumerate(data):
+        if b in OPCODES:
+            return i
+    return None
 
 def parse_commands(blob):
     """
@@ -27,19 +32,17 @@ def parse_commands(blob):
     while ptr < len(blob):
         opcode = blob[ptr]
         ptr += 1
-        if opcode == OP_END:
+        if opcode == 0xFF:  # END
             break
-        elif opcode in (OP_MOVE, OP_LINE):
-            # 2 bytes X, 2 bytes Y
+        if opcode == 0x01 or opcode == 0x02:
             x, y = struct.unpack_from("<hh", blob, ptr)
             ptr += 4
-            cmds.append(("M" if opcode == OP_MOVE else "L", x, y))
-        elif opcode == OP_CURVE:
+            cmds.append((OPCODES[opcode], x, y))
+        elif opcode == 0x03:
             pts = struct.unpack_from("<hhhhhh", blob, ptr)
             ptr += 12
-            cmds.append(("C",) + pts)
+            cmds.append((OPCODES[opcode],) + pts)
         else:
-            # Unknown opcode: stop or skip
             print(f"[WARN] Unknown opcode 0x{opcode:02X} at {ptr-1}")
             break
     return cmds
@@ -69,9 +72,23 @@ def main():
         sys.exit(1)
 
     sgn_path, eps_path = sys.argv[1], sys.argv[2]
-    raw_blob = read_sgn(sgn_path)
-    cmds = parse_commands(raw_blob)
+    data = open(sgn_path, "rb").read()
+
+    offset = find_header_offset(data)
+    if offset is None:
+        print("[ERROR] No valid opcode found in file")
+        sys.exit(1)
+
+    print(f"[DEBUG] Detected first opcode {hex(data[offset])} at byte offset {offset}")
+    # Dump surrounding bytes for verification
+    start = max(0, offset - 8)
+    snippet = data[start: start + 24]
+    print("[DEBUG] Byte snippet around start:", " ".join(f"{b:02X}" for b in snippet))
+
+    blob = data[offset:]
+    cmds = parse_commands(blob)
     print(f"[DEBUG] Parsed {len(cmds)} commands")
+
     write_eps(eps_path, cmds)
 
 if __name__ == "__main__":
